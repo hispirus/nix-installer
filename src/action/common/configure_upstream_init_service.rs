@@ -8,7 +8,7 @@ use tracing::{span, Span};
 use crate::action::{ActionError, ActionErrorKind, ActionTag, StatefulAction};
 use crate::execute_command;
 
-use crate::action::{Action, ActionDescription};
+use crate::action::{common::ConfigureInitService, Action, ActionDescription};
 use crate::settings::InitSystem;
 
 const DETERMINATE_NIX_EE_SERVICE_SRC: &str = "/nix/determinate/nix-daemon.service";
@@ -26,103 +26,46 @@ const DARWIN_LAUNCHD_SERVICE_NAME: &str = "org.nixos.nix-daemon";
 
 const DARWIN_ENTERPRISE_EDITION_DAEMON_DEST: &str =
     "/Library/LaunchDaemons/systems.determinate.nix-daemon.plist";
+const DARWIN_ENTERPRISE_EDITION_SERVICE_NAME: &str = "systems.determinate.nix-daemon";
 
 /**
 Configure the init to run the Nix daemon
 */
 #[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
-pub struct ConfigureInitService {
-    init: InitSystem,
-    start_daemon: bool,
-    // TODO(cole-h): make an enum so we can distinguish between "written out by another step" vs "actually there isn't one"
-    service_src: Option<PathBuf>,
-    service_name: Option<String>,
-    service_dest: Option<PathBuf>,
+pub struct ConfigureUpstreamInitService {
+    configure_init_service: StatefulAction<ConfigureInitService>,
 }
 
-impl ConfigureInitService {
-    async fn check_if_systemd_unit_exists(src: &Path, dest: &Path) -> Result<(), ActionErrorKind> {
-        // TODO: once we have a way to communicate interaction between the library and the cli,
-        // interactively ask for permission to remove the file
-
-        let unit_src = PathBuf::from(src);
-        // NOTE: Check if the unit file already exists...
-        let unit_dest = PathBuf::from(dest);
-        if unit_dest.exists() {
-            if unit_dest.is_symlink() {
-                let link_dest = tokio::fs::read_link(&unit_dest)
-                    .await
-                    .map_err(|e| ActionErrorKind::ReadSymlink(unit_dest.clone(), e))?;
-                if link_dest != unit_src {
-                    return Err(ActionErrorKind::SymlinkExists(unit_dest));
-                }
-            } else {
-                return Err(ActionErrorKind::FileExists(unit_dest));
-            }
-        }
-        // NOTE: ...and if there are any overrides in the most well-known places for systemd
-        let dest_d = format!("{dest}.d", dest = dest.display());
-        if Path::new(&dest_d).exists() {
-            return Err(ActionErrorKind::DirExists(PathBuf::from(dest_d)));
-        }
-
-        Ok(())
-    }
-
+impl ConfigureUpstreamInitService {
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn plan(
         init: InitSystem,
         start_daemon: bool,
-        service_src: Option<PathBuf>,
-        service_dest: Option<PathBuf>,
-        service_name: Option<String>,
     ) -> Result<StatefulAction<Self>, ActionError> {
-        match init {
-            InitSystem::Launchd => {
-                // No plan checks, yet
-            },
-            InitSystem::Systemd => {
-                let service_src = service_src
-                    .as_ref()
-                    .expect("service_src should be defined for systemd");
-                let service_dest = service_dest
-                    .as_ref()
-                    .expect("service_dest should be defined for systemd");
-
-                // If `no_start_daemon` is set, then we don't require a running systemd,
-                // so we don't need to check if `/run/systemd/system` exists.
-                if start_daemon {
-                    // If /run/systemd/system exists, we can be reasonably sure the machine is booted
-                    // with systemd: https://www.freedesktop.org/software/systemd/man/sd_booted.html
-                    if !Path::new("/run/systemd/system").exists() {
-                        return Err(Self::error(ActionErrorKind::SystemdMissing));
-                    }
-                }
-
-                if which::which("systemctl").is_err() {
-                    return Err(Self::error(ActionErrorKind::SystemdMissing));
-                }
-
-                Self::check_if_systemd_unit_exists(service_src, service_dest)
-                    .await
-                    .map_err(Self::error)?;
-                Self::check_if_systemd_unit_exists(Path::new(SOCKET_SRC), Path::new(SOCKET_DEST))
-                    .await
-                    .map_err(Self::error)?;
-            },
-            InitSystem::None => {
-                // Nothing here, no init system
-            },
+        let service_src: Option<PathBuf> = match init {
+            InitSystem::Launchd => Some(DARWIN_NIX_DAEMON_SOURCE.into()),
+            InitSystem::Systemd => Some(SERVICE_SRC.into()),
+            InitSystem::None => None,
+        };
+        let service_dest: Option<PathBuf> = match init {
+            InitSystem::Launchd => Some(DARWIN_NIX_DAEMON_DEST.into()),
+            InitSystem::Systemd => Some(SERVICE_DEST.into()),
+            InitSystem::None => None,
+        };
+        let service_name: Option<String> = match init {
+            InitSystem::Launchd => Some(DARWIN_LAUNCHD_SERVICE_NAME.into()),
+            _ => None,
         };
 
         Ok(Self {
-            init,
-            start_daemon,
-            service_src,
-            service_dest,
-            service_name,
-        }
-        .into())
+            configure_init_service: ConfigureInitService::plan(
+                init,
+                start_daemon,
+                service_src,
+                service_dest,
+                service_name,
+            ),
+        })
     }
 }
 
@@ -208,6 +151,7 @@ impl Action for ConfigureInitService {
             service_src,
             service_dest,
             service_name,
+            enterprise_edition: _,
         } = self;
 
         match init {
