@@ -2,22 +2,20 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
 use tracing::{span, Span};
 
 use crate::action::{ActionError, ActionErrorKind, ActionTag, StatefulAction};
-use crate::execute_command;
 
 use crate::action::{common::ConfigureInitService, Action, ActionDescription};
 use crate::settings::InitSystem;
 
-const DARWIN_ENTERPRISE_EDITION_DAEMON_DEST: &str =
-    "/Library/LaunchDaemons/systems.determinate.nix-daemon.plist";
-const DARWIN_LAUNCHD_DOMAIN: &str = "system";
+// Linux
 const SERVICE_DEST: &str = "/etc/systemd/system/nix-daemon.service";
 const DETERMINATE_NIX_EE_SERVICE_SRC: &str = "/nix/determinate/nix-daemon.service";
-const DARWIN_NIX_DAEMON_SOURCE: &str =
-    "/nix/var/nix/profiles/default/Library/LaunchDaemons/org.nixos.nix-daemon.plist";
+
+// Darwin
+const DARWIN_ENTERPRISE_EDITION_DAEMON_DEST: &str =
+    "/Library/LaunchDaemons/systems.determinate.nix-daemon.plist";
 const DARWIN_ENTERPRISE_EDITION_SERVICE_NAME: &str = "systems.determinate.nix-daemon";
 
 /**
@@ -25,7 +23,6 @@ Configure the init to run the Nix daemon
 */
 #[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
 pub struct ConfigureEnterpriseEditionInitService {
-    start_daemon: bool,
     // FIXME(cole-h): add to tracing stuff
     configure_init_service: StatefulAction<ConfigureInitService>,
 }
@@ -66,7 +63,6 @@ impl ConfigureEnterpriseEditionInitService {
         .map_err(Self::error)?;
 
         Ok(Self {
-            start_daemon,
             configure_init_service,
         }
         .into())
@@ -80,8 +76,7 @@ impl Action for ConfigureEnterpriseEditionInitService {
         ActionTag("configure_enterprise_edition_init_service")
     }
     fn tracing_synopsis(&self) -> String {
-        "Configure the Determinate Nix Enterprise Edition daemon related settings with launchctl"
-            .to_string()
+        "Configure Determinate Nix Enterprise Edition daemon".to_string()
     }
 
     fn tracing_span(&self) -> Span {
@@ -92,20 +87,15 @@ impl Action for ConfigureEnterpriseEditionInitService {
     }
 
     fn execute_description(&self) -> Vec<ActionDescription> {
-        let mut explanation = vec![format!("Create `{DARWIN_ENTERPRISE_EDITION_DAEMON_DEST}`")];
-        if self.start_daemon {
-            explanation.push(format!(
-                "Run `launchctl bootstrap {DARWIN_ENTERPRISE_EDITION_DAEMON_DEST}`"
-            ));
-        }
-
-        vec![ActionDescription::new(self.tracing_synopsis(), explanation)]
+        vec![ActionDescription::new(
+            self.tracing_synopsis(),
+            vec![self.configure_init_service.tracing_synopsis()],
+        )]
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
     async fn execute(&mut self) -> Result<(), ActionError> {
         let Self {
-            start_daemon,
             configure_init_service,
         } = self;
 
@@ -141,29 +131,14 @@ impl Action for ConfigureEnterpriseEditionInitService {
 
     fn revert_description(&self) -> Vec<ActionDescription> {
         vec![ActionDescription::new(
-            "Unconfigure Nix daemon related settings with launchctl".to_string(),
-            vec![format!(
-                "Run `launchctl bootout {DARWIN_ENTERPRISE_EDITION_DAEMON_DEST}`"
-            )],
+            "Unconfigure Determinate Nix Enterprise Edition daemon".to_string(),
+            vec![self.configure_init_service.tracing_synopsis()],
         )]
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
     async fn revert(&mut self) -> Result<(), ActionError> {
-        execute_command(
-            Command::new("launchctl")
-                .process_group(0)
-                .arg("bootout")
-                .arg(
-                    [
-                        DARWIN_LAUNCHD_DOMAIN,
-                        DARWIN_ENTERPRISE_EDITION_SERVICE_NAME,
-                    ]
-                    .join("/"),
-                ),
-        )
-        .await
-        .map_err(Self::error)?;
+        self.configure_init_service.try_revert().await?;
 
         Ok(())
     }

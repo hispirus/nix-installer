@@ -11,21 +11,12 @@ use crate::execute_command;
 use crate::action::{Action, ActionDescription};
 use crate::settings::InitSystem;
 
-const DETERMINATE_NIX_EE_SERVICE_SRC: &str = "/nix/determinate/nix-daemon.service";
-const SERVICE_SRC: &str = "/nix/var/nix/profiles/default/lib/systemd/system/nix-daemon.service";
-const SERVICE_DEST: &str = "/etc/systemd/system/nix-daemon.service";
 const SOCKET_SRC: &str = "/nix/var/nix/profiles/default/lib/systemd/system/nix-daemon.socket";
 const SOCKET_DEST: &str = "/etc/systemd/system/nix-daemon.socket";
 const TMPFILES_SRC: &str = "/nix/var/nix/profiles/default/lib/tmpfiles.d/nix-daemon.conf";
 const TMPFILES_DEST: &str = "/etc/tmpfiles.d/nix-daemon.conf";
-const DARWIN_NIX_DAEMON_DEST: &str = "/Library/LaunchDaemons/org.nixos.nix-daemon.plist";
-const DARWIN_NIX_DAEMON_SOURCE: &str =
-    "/nix/var/nix/profiles/default/Library/LaunchDaemons/org.nixos.nix-daemon.plist";
-const DARWIN_LAUNCHD_DOMAIN: &str = "system";
-const DARWIN_LAUNCHD_SERVICE_NAME: &str = "org.nixos.nix-daemon";
 
-const DARWIN_ENTERPRISE_EDITION_DAEMON_DEST: &str =
-    "/Library/LaunchDaemons/systems.determinate.nix-daemon.plist";
+const DARWIN_LAUNCHD_DOMAIN: &str = "system";
 
 /**
 Configure the init to run the Nix daemon
@@ -41,7 +32,10 @@ pub struct ConfigureInitService {
 }
 
 impl ConfigureInitService {
-    async fn check_if_systemd_unit_exists(src: &Path, dest: &Path) -> Result<(), ActionErrorKind> {
+    pub(crate) async fn check_if_systemd_unit_exists(
+        src: &Path,
+        dest: &Path,
+    ) -> Result<(), ActionErrorKind> {
         // TODO: once we have a way to communicate interaction between the library and the cli,
         // interactively ask for permission to remove the file
 
